@@ -31,9 +31,7 @@ df <- dat %>%
     hashtags.0, hashtags.1, hashtags.2, hashtags.3, hashtags.4,
     hashtags.5, hashtags.6, hashtags.7, hashtags.8, hashtags.9,
     hashtags.10, hashtags.11,
-    mentions.0, mentions.1, mentions.2,
     ownerUsername,
-    taggedUsers.0.username, taggedUsers.1.username, taggedUsers.2.username, taggedUsers.3.username,
     timestamp, type, url,
     videoDuration, videoPlayCount, videoUrl, videoViewCount
   )
@@ -53,17 +51,18 @@ df_summarize <- function(strings) {
 df <- df %>%
   rowwise() %>%
   mutate(
-    allTaggedUsernames = df_summarize(
-      c(taggedUsers.0.username, taggedUsers.1.username, taggedUsers.2.username, taggedUsers.3.username)
-    ),
-    allMentions = df_summarize(
-      c(mentions.0, mentions.1, mentions.2)
-    ),
-    allHashtags = df_summarize(
-      c(hashtags.0, hashtags.1, hashtags.2, hashtags.3, hashtags.4, 
-        hashtags.5, hashtags.6, hashtags.7, hashtags.8, hashtags.9, 
-        hashtags.10, hashtags.11)
-    ),
+    allHashtags = {
+      # Alle Hashtags kombinieren
+      hashtags_list <- c(hashtags.0, hashtags.1, hashtags.2, hashtags.3, hashtags.4, 
+                         hashtags.5, hashtags.6, hashtags.7, hashtags.8, hashtags.9, 
+                         hashtags.10, hashtags.11)
+      
+      # Die unerwünschten Hashtags herausfiltern
+      hashtags_filtered <- setdiff(hashtags_list, c("tagesschau", "nachrichten"))
+      
+      # Die gefilterten Hashtags als Zeichenkette (Vektor) zurückgeben
+      paste(hashtags_filtered, collapse = ", ")
+    },
     caption_length = nchar(caption),  # Korrekte Berechnung der Caption-Länge
     word_count = length(strsplit(caption, "\\s+")[[1]])  # Berechnung der Wortanzahl
   ) %>%
@@ -71,14 +70,13 @@ df <- df %>%
 
 # Zusammengefasste Reihen rausgefiltert und fertig gereinigtes Datenset überschreiben
 df <- df %>%
-  select(-starts_with("taggedUsers"), -starts_with("mentions"), -starts_with("hashtags"))
+  select(-starts_with("taggedUsers"))
 
 ## Vorbereitung für Topic Modeling - Deskreptive Statistik zur Caption 
 Q1 <- quantile(df$word_count, 0.25)
 avg_caption_length <- round(mean(df$word_count),2)
 min_caption_length <- round(min(df$word_count),2)
 max_caption_length <- round(max(df$word_count),2)
-max_caption_length <- round(max(Q1),2)
 print(paste("Durchschnittliche Wörter in Posting Caption:", avg_caption_length))
 print(paste("Maximale Anzahl an Wörter in Posting Caption:", max_caption_length))
 print(paste("Minimale Anzahl an Wörter in Posting Caption:", min_caption_length))
@@ -91,8 +89,6 @@ df <- df %>%
   mutate(
     caption = str_replace_all(caption, "#\\S+", ""),  # entfernt # und das folgende Wort
     caption = str_squish(caption),  
-    allHashtags = str_replace_all(allHashtags, ",tagesschau", ""),
-    allHashtags = str_replace_all(allHashtags, ",nachrichten", "") # entfernt tageschau und nachrichten aus #
   )
 
 
@@ -144,7 +140,7 @@ topic_model <- LDA(dtm, K, method="Gibbs", control=list(
 ))
 
 # Ergebnisse aus dem Modell extrahieren
-topic_terms <- terms(topic_model, 13)  # 10 wichtigste Wörter pro Topic
+topic_terms <- terms(topic_model, 13)  # 13 wichtigste Wörter pro Topic
 print(topic_terms)
 
 tmResult <- posterior(topic_model)
@@ -175,6 +171,62 @@ ggplot(vizDataFrame, aes(x = kalenderwoche, y = value, fill = variable)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
   ggtitle("Topic Proportions per Kalenderwoche")
 
+
+# 1. Berechne die Top 10 Dokumente (Zeilen) mit der höchsten Wahrscheinlichkeit für jedes Thema
+top_documents_per_topic <- apply(theta, 2, function(topic_probs) {
+  order(topic_probs, decreasing = TRUE)[1:10]  # Holen der Indizes der Top 10 Dokumente
+})
+
+# 2. Erstelle eine Liste, um die Top Hashtags für jedes Thema zu speichern
+top_hashtags_per_topic <- list()
+
+# 3. Iteriere über jedes Thema und extrahiere die Hashtags für die Top 10 Dokumente
+for (topic_idx in 1:K) {
+  
+  # Holen der Top 10 Dokumente für das aktuelle Thema
+  top_docs <- top_documents_per_topic[, topic_idx]
+  # Extrahiere die Hashtags für diese Top 10 Dokumente
+  hashtags_list <- df$allHashtags[top_docs]
+  
+  # Kombiniere alle Hashtags in einem Vektor
+  hashtags_combined <- unlist(hashtags_list)
+  
+  # Entferne duplizierte Hashtags und zeige die einzigartigen Hashtags
+  unique_hashtags <- unique(hashtags_combined)
+  
+  # Top 13 Begriffe für das Thema aus dem LDA-Modell (aus topic_terms)
+  top_topic_terms <- topic_terms[, topic_idx]  # Die Top 13 Begriffe für das Thema
+  top_topic_terms_combined <- paste(top_topic_terms, collapse = ", ")
+  
+  # Ausgabe der Top-Hashtags für das Thema
+  print(paste("Thema", topic_idx,topic_idx, "- Top Begriffe:", top_topic_terms_combined ))
+  print(unique_hashtags)
+  cat("\n")
+}
+
+
+## Hypothesentest
+# H0: Die durchschnittliche Anzahl an Kommentaren/Likes ist für alle Themen gleich.
+# H1: Es gibt Unterschiede in der durchschnittlichen Anzahl an Kommentaren/Likes zwischen den Themen.
+
+# Zuweisung des wahrscheinlichsten Themas für jedes Dokument
+df$topic <- apply(theta, 1, which.max)
+
+# Berechnung der durchschnittlichen Kommentare für jedes Thema
+avg_comments_per_topic <- aggregate(df$commentsCount, by = list(topic = df$topic), FUN = mean)
+colnames(avg_comments_per_topic)[2] <- "avg_comments"
+
+# Ausgabe der durchschnittlichen Kommentare pro Thema
+print(avg_comments_per_topic)
+
+# Einweg-ANOVA durchführen
+anova_result <- aov(commentsCount ~ factor(topic), data = df)
+summary(anova_result)
+
+
+# lineare regression
+lm_result <- lm(commentsCount ~ factor(topic), data = df)
+summary(lm_result)
 
 
 
