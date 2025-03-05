@@ -19,11 +19,22 @@ dat <- read.csv("./auxilary/tagesschau_instagram_posts.csv",
 # Reihen und Zeilen des Datensatz
 dim(dat)
 
+
+dat$timestamp <- ymd_hms(dat$timestamp)
+dat$kalenderwoche <- week(dat$timestamp)
+
+
+
+kw_counts <- dat %>%
+  group_by(kalenderwoche) %>%
+  summarise(anzahl_beitraege = n())
+
 ### Data Cleaning
 df <- dat %>%
   filter(
     ownerUsername == "tagesschau",
-    as.Date(timestamp) > as.Date("2024-07-31")
+    as.Date(timestamp) > as.Date("2024-08-04"),
+    as.Date(timestamp) < as.Date("2025-02-03")
   ) %>%
   select(
     caption,
@@ -32,7 +43,7 @@ df <- dat %>%
     hashtags.5, hashtags.6, hashtags.7, hashtags.8, hashtags.9,
     hashtags.10, hashtags.11,
     ownerUsername,
-    timestamp, type, url,
+    timestamp, type
   )
 
 # Hashtags in einen Vector kombinieren für Qualitätskontrolle später
@@ -45,8 +56,8 @@ df <- df %>%
                          hashtags.10, hashtags.11)
       
       # inhaltliche irrelevante Hashtags herausfiltern
-      hashtags_filtered <- setdiff(hashtags_list, c("tagesschau", "nachrichten"))
-      paste(hashtags_filtered, collapse = ", ")
+      allHashtags <- setdiff(hashtags_list, c("tagesschau", "nachrichten"))
+      paste(allHashtags, collapse = ", ")
     },
     word_count = length(strsplit(caption, "\\s+")[[1]])  # Berechnung der Anzahl an Wörtern
   ) %>%
@@ -54,7 +65,7 @@ df <- df %>%
 
 # Zusammengefasste Hashtags Spalten rausfiltern und fertig gecleantes dataset überschreiben
 df <- df %>%
-  select(-starts_with("taggedUsers"))
+  select(-starts_with("hashtags"))
 
 ## Vorbereitung für Topic Modeling - Deskreptive Statistik zur Caption 
 Q1 <- quantile(df$word_count, 0.25)  
@@ -74,7 +85,7 @@ print(paste("Standardabweichung:", sd_caption_length))
 print(paste("25% der Werte liegen unter:", Q1))
 print(paste("75% der Werte liegen unter:", Q3))
 print(paste("Inter Quartile Range):", iqr))
-library(ggplot2)
+
 
 # Verteilungs Plot
 hist(df$word_count, breaks = 30, col = "lightblue", main = "Verteilung der Wortanzahl in Captions", xlab = "Anzahl Wörter")
@@ -88,8 +99,24 @@ ggplot(df, aes(x = word_count, fill = type)) +
        fill = "Type") +
   theme_minimal()
 
+# boxplot für likes
+ggplot(df, aes(x = type, y = likesCount, fill = type)) +
+  geom_boxplot() +
+  labs(title = "Verteilung der Likes nach Beitragstyp",
+       x = "Beitragstyp",
+       y = "Anzahl der Likes") +
+  theme_minimal()
+
+# box plot für kommentare
+ggplot(df, aes(x = type, y = commentsCount, fill = type)) +
+  geom_boxplot() +
+  labs(title = "Verteilung der Kommentare nach Beitragstyp",
+       x = "Beitragstyp",
+       y = "Anzahl der Kommentare") +
+  theme_minimal()
+
 ## basierenden darauf filtern der unteren outlier (keine iqr, weil obere Grenze das Ergebnis nicht verfälscht)
-# - mindestens 55 Wörter in der Caption
+# - mindestens 60 Wörter in der Caption
 df <- df %>%
   filter(word_count > 60) %>%
   mutate(
@@ -97,15 +124,26 @@ df <- df %>%
     caption = str_squish(caption),  
   )
 
+
+
 # Neue Deskreptive Statistken jetzt wiedergeben
 dim(df)
 hist(df$word_count, breaks = 30, col = "lightblue", main = "Verteilung der Wortanzahl in Captions", xlab = "Anzahl Wörter")
 Q1 <- quantile(df$word_count, 0.25)  
 Q3 <- quantile(df$word_count, 0.75)  
 iqr <- IQR(df$word_count)
+avg_caption_length <- round(mean(df$word_count), 2)
+median_caption_length <- round(median(df$word_count), 2)
+min_caption_length <- round(min(df$word_count), 2)
+max_caption_length <- round(max(df$word_count), 2)
+print(paste("Durchschnittliche Wörterzahl:", avg_caption_length))
+print(paste("Median der Wörter:", median_caption_length))
+print(paste("Minimale Anzahl an Wörtern", min_caption_length))
+print(paste("Maximale Anzahl an Wörtern:", max_caption_length))
 print(paste("25% der Werte liegen unter:", Q1))
 print(paste("75% der Werte liegen unter:", Q3))
 print(paste("Inter Quartile Range):", iqr))
+print(dim(df))
 
 ### Topic Model
 # corpus objekt erstellen
@@ -129,6 +167,8 @@ tokens <- tokens(corpus_data,
                  valuetype = "fixed") %>%
   tokens_remove(pattern = stopwords_de, padding = T)
 
+
+
 # Erstelle DTM
 dtm <- tokens %>%
   tokens_remove("") %>%
@@ -147,12 +187,12 @@ sel_idx <- rowSums(dtm) > 0
 dtm <- dtm[sel_idx, ]
 
 # Topics Anzahl
-K <- 12
+K <- 10
 
 # LDA unsuprvised model 
 topic_model <- LDA(dtm, K, method="Gibbs", control=list(
-  iter = 1400,      
-  alpha = 0.01,     
+  iter = 1000,      
+  alpha = 0.05,     
   seed = 42,      
   verbose = 50
 ))
@@ -227,6 +267,9 @@ ggplot(vizDataFrame, aes(x = kalenderwoche, y = value, fill = variable)) +
   ggtitle("Topic Proportions per Kalenderwoche")
 
 
+
+
+
 ## Hypothesentest
 # H0: Die durchschnittliche Anzahl an Kommentaren/Likes ist für alle Themen gleich.
 # H1: Es gibt Unterschiede in der durchschnittlichen Anzahl an Kommentaren/Likes zwischen den Themen.
@@ -256,27 +299,18 @@ colnames(stats_likes) <- c("topic", "min_likes", "max_likes", "median_likes", "a
 anova_result <- aov(commentsCount ~ factor(topic), data = df)
 summary(anova_result)
 
-# Einweg-ANOVA hypothesen test für comments
+# Einweg-ANOVA hypothesen test für like
 anova_result <- aov(likesCount ~ factor(topic), data = df)
 summary(anova_result)
 
+threshold <- 0.3  
 
-## Themen Überschneidungen als Heatmap
-theta_melted <- melt(theta)
-# Erstelle eine interaktive Heatmap
-plot_ly(
-  data = theta_melted, 
-  x = ~Var2, 
-  y = ~Var1, 
-  z = ~value, 
-  type = "heatmap", 
-  colors = colorRamp(c("white", "blue"))
-) %>%
-  layout(
-    title = "Interaktive Themenüberschneidungen", # Titel der Visualisierung
-    xaxis = list(title = "Themen", showgrid = FALSE),  # Titel für x-Achse
-    yaxis = list(showticklabels = FALSE),  # Keine Tick-Beschriftung auf der y-Achse
-    showlegend = FALSE  # Keine Legende anzeigen
-)
+# Filter für KW 42 und 43 und hohe Wahrscheinlichkeit für Thema 1
+sub_df <- df[df$kalenderwoche %in% c(42, 43), ]
+sub_df$theta_topic_1 <- theta[df$kalenderwoche %in% c(42, 43), 1]
+sub_df <- sub_df[order(sub_df$theta_topic_1, decreasing = TRUE), ]
 
-
+# Zähle die Anzahl der Beiträge pro Kalenderwoche
+kw_counts <- df %>%
+  group_by(kalenderwoche) %>%
+  summarise(anzahl_beitraege = n())
