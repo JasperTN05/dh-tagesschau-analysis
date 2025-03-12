@@ -1,6 +1,7 @@
 # Workspace
 #setwd("./desktop/studium/semester_I/DH/dh-tagesschau-analysis")
 
+
 # Library Import Statements
 options(stringsAsFactors = FALSE)
 library(dplyr)
@@ -19,16 +20,6 @@ dat <- read.csv("./auxilary/tagesschau_instagram_posts.csv",
 # Reihen und Zeilen des Datensatz
 dim(dat)
 
-
-dat$timestamp <- ymd_hms(dat$timestamp)
-dat$kalenderwoche <- week(dat$timestamp)
-
-
-
-kw_counts <- dat %>%
-  group_by(kalenderwoche) %>%
-  summarise(anzahl_beitraege = n())
-
 ### Data Cleaning
 df <- dat %>%
   filter(
@@ -45,6 +36,22 @@ df <- dat %>%
     ownerUsername,
     timestamp, type
   )
+
+# Für spätere Kalendwerwochen Analyse
+df$timestamp <- ymd_hms(df$timestamp)
+df$kalenderwoche <- week(df$timestamp)
+
+kw_counts <- df %>%
+  group_by(kalenderwoche) %>%
+  summarise(anzahl_beitraege = n())
+
+# plot der KW Verteilung
+ggplot(kw_counts, aes(x = kalenderwoche, y = anzahl_beitraege)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Anzahl der Beiträge pro Kalenderwoche",
+       x = "Kalenderwoche",
+       y = "Anzahl der Beiträge") +
+  theme_minimal()
 
 # Hashtags in einen Vector kombinieren für Qualitätskontrolle später
 df <- df %>%
@@ -89,6 +96,7 @@ print(paste("Inter Quartile Range):", iqr))
 
 # Verteilungs Plot
 hist(df$word_count, breaks = 30, col = "lightblue", main = "Verteilung der Wortanzahl in Captions", xlab = "Anzahl Wörter")
+
 # Histogramm nach Type
 ggplot(df, aes(x = word_count, fill = type)) +
   geom_histogram(binwidth = 5, position = "identity", alpha = 0.6) +
@@ -240,10 +248,6 @@ for (topic_idx in 1:K) {
   cat("\n")
 }
 
-# Topic proportions over Time
-df$timestamp <- ymd_hms(df$timestamp)
-df$kalenderwoche <- week(df$timestamp)
-
 # Berechnung der durchschnittlichen Topic-Proportionen pro Kalenderwoche
 topic_proportion_per_week <- aggregate(theta,
                                        by = list(kalenderwoche = df$kalenderwoche), 
@@ -267,9 +271,7 @@ ggplot(vizDataFrame, aes(x = kalenderwoche, y = value, fill = variable)) +
   ggtitle("Topic Proportions per Kalenderwoche")
 
 
-
-
-
+# Zusammenhang zwischen Thema und Interaktionsmetriken
 ## Hypothesentest
 # H0: Die durchschnittliche Anzahl an Kommentaren/Likes ist für alle Themen gleich.
 # H1: Es gibt Unterschiede in der durchschnittlichen Anzahl an Kommentaren/Likes zwischen den Themen.
@@ -295,6 +297,25 @@ stats_likes <- do.call(data.frame, stats_likes)
 colnames(stats_likes) <- c("topic", "min_likes", "max_likes", "median_likes", "avg_likes", 
                            "sd_likes", "iqr_likes", "n_posts")
 
+# Plot für Medianwerte der Comments
+ggplot(stats_comments, aes(x = reorder(topic_terms, median_comments), y = median_comments)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Median der Comments pro Thema", 
+       x = "Thema", 
+       y = "Median der Comments") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_minimal()
+
+
+# Plot für Medianwerte der Likes
+ggplot(stats_likes, aes(x = reorder(topic_terms, median_likes), y = median_likes)) +
+  geom_bar(stat = "identity", fill = "lightcoral") +
+  labs(title = "Median der Likes pro Thema", 
+       x = "Thema", 
+       y = "Median der Likes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_minimal()
+
 # Einweg-ANOVA hypothesen test für comments
 anova_result <- aov(commentsCount ~ factor(topic), data = df)
 summary(anova_result)
@@ -303,14 +324,7 @@ summary(anova_result)
 anova_result <- aov(likesCount ~ factor(topic), data = df)
 summary(anova_result)
 
-threshold <- 0.3  
 
-# Filter für KW 42 und 43 und hohe Wahrscheinlichkeit für Thema 1
-sub_df <- df[df$kalenderwoche %in% c(42, 43), ]
-sub_df$theta_topic_1 <- theta[df$kalenderwoche %in% c(42, 43), 1]
-sub_df <- sub_df[order(sub_df$theta_topic_1, decreasing = TRUE), ]
 
-# Zähle die Anzahl der Beiträge pro Kalenderwoche
-kw_counts <- df %>%
-  group_by(kalenderwoche) %>%
-  summarise(anzahl_beitraege = n())
+
+
